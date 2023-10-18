@@ -1,5 +1,87 @@
-<root>
-    <mule>This is the mule code</mule>
-    <cat>This is the cat code</cat>
-    <dog>This is the dog code</dog>
-</root>
+<?xml version="1.0" encoding="UTF-8"?>
+
+<mule xmlns:db="http://www.mulesoft.org/schema/mule/db" xmlns:ee="http://www.mulesoft.org/schema/mule/ee/core"
+	xmlns:compression="http://www.mulesoft.org/schema/mule/compression"
+	xmlns:http="http://www.mulesoft.org/schema/mule/http" xmlns="http://www.mulesoft.org/schema/mule/core" xmlns:doc="http://www.mulesoft.org/schema/mule/documentation" xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance" xsi:schemaLocation="http://www.mulesoft.org/schema/mule/core http://www.mulesoft.org/schema/mule/core/current/mule.xsd
+http://www.mulesoft.org/schema/mule/http http://www.mulesoft.org/schema/mule/http/current/mule-http.xsd
+http://www.mulesoft.org/schema/mule/compression http://www.mulesoft.org/schema/mule/compression/current/mule-compression.xsd
+http://www.mulesoft.org/schema/mule/ee/core http://www.mulesoft.org/schema/mule/ee/core/current/mule-ee.xsd
+http://www.mulesoft.org/schema/mule/db http://www.mulesoft.org/schema/mule/db/current/mule-db.xsd">
+	<flow name="animeFlow" doc:id="8934cc76-3405-49bf-a626-da9ae53b4547" >
+		<http:listener doc:name="Triggers Flow" doc:id="09e321e1-2d69-483b-8654-c05b12b8e67d" config-ref="HTTP_Listener_config" path="${HL.path}">
+			<http:error-response statusCode="#[vars.status]" >
+				<http:body ><![CDATA[#[output application/json --- payload]]]></http:body>
+			</http:error-response>
+		</http:listener>
+		<set-variable value="#[payload.customerID]" doc:name="Set Variable" doc:id="af73ad48-b949-48e1-b64c-29031316e35b" variableName="customer_Id"/>
+		<until-successful maxRetries="5" doc:name="Until Successful" doc:id="b1283b69-0067-4f23-bb99-f6036b334efe" millisBetweenRetries="50000">
+			<try doc:name="Try" doc:id="2a8aaa75-fe2e-4728-a557-af78930f6be1" >
+				<http:request method="GET" doc:name="HTTP: Get Anime API" doc:id="56950f58-6094-457c-b1d5-4aa5b094b7a0" url="${Request.URL}">
+					<ee:repeatable-file-store-stream bufferUnit="MB" />
+				</http:request>
+			</try>
+		</until-successful>
+		<compression:decompress doc:name="Decompress:Data" doc:id="17e91826-ff45-45bc-8deb-12ffa227a9dd" outputMimeType="application/xml" outputEncoding="UTF-8">
+			<compression:decompressor >
+				<compression:gzip-decompressor />
+			</compression:decompressor>
+		</compression:decompress>
+		<ee:transform doc:name="Build:converting XML to JSON" doc:id="0e294c24-5609-41a9-8ef3-7d5a9a939a7e" >
+			<ee:message >
+				<ee:set-payload ><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-payload>
+			</ee:message>
+			<ee:variables >
+				<ee:set-variable variableName="response" ><![CDATA[%dw 2.0
+output application/json
+---
+payload]]></ee:set-variable>
+			</ee:variables>
+		</ee:transform>
+		<logger level="INFO" doc:name="Logs payload" doc:id="90a11369-1dd2-4b4d-9587-39f61c239e88" message="#[payload]"/>
+		<choice doc:name="Choice" doc:id="51d66274-de56-4cdd-b1a8-6bc14e9f03d2" >
+			<when expression="#[vars.response.error=='banned' or vars.response.error=='Missing']">
+				<raise-error doc:name="Raise error" doc:id="0f18a6f7-71cb-4b86-9731-b17926a20119" type="CUSTOM:UNKNOWN_ERROR"/>
+			</when>
+			<when expression="#[vars.response.error=='Not Found']">
+				<raise-error doc:name="Raise error" doc:id="2a870867-5d26-4c43-8ec7-f0fdfb49cdcb" type="CUSTOM:NOT_FOUND"/>
+			</when>
+			<otherwise >
+				<try doc:name="Try" doc:id="d9d85582-4115-48bd-a2b3-18dfca4d7d0a" >
+					<db:select doc:name="Retrieve:Recommendation" doc:id="e3f22f19-a4e7-4993-a0af-8e2d7e26e40b" config-ref="Database_Config">
+						<db:sql ><![CDATA[select MAX(recommendation) as recommendation from customer_detail where customerID=:customer_Id]]></db:sql>
+						<db:input-parameters ><![CDATA[#[customer_Id:vars.customer_Id]]]></db:input-parameters>
+					</db:select>
+				</try>
+				<set-variable value="#[payload[0].recommendation]" doc:name="Store:recommendation" doc:id="0c1eb81d-dc56-4321-83f1-affeaaa525d6" variableName="count"/>
+				<ee:transform doc:name="Build:Manipulation On Data" doc:id="181aee64-3617-410c-944e-6755461c6237" >
+					<ee:message >
+						<ee:set-payload resource="Anime.dwl" />
+					</ee:message>
+				</ee:transform>
+				<logger level="INFO" doc:name="Logger" doc:id="8a4a2614-0ecf-4489-96c0-65ac9b7a94f4" message="#[payload]"/>
+				<try doc:name="Try" doc:id="b77fd3d6-0113-4328-99e4-21691434556a" >
+					<db:insert doc:name="Insert:Data" doc:id="cfc334e6-ba4c-43cb-8791-d9f1f1acc2fa" config-ref="Database_Config">
+						<db:sql ><![CDATA[insert into customer_detail(customerID,episodecount,startdate,enddate,Title,review_rating,tags,creators,recommendation,created_date)
+  values (:customerID,:episodecount,:startdate,:enddate,:Title,:review_rating,:tags,:creators,:recommendation,:created_date)]]></db:sql>
+						<db:input-parameters ><![CDATA[#[{
+	customerID:vars.customer_Id,
+	episodecount:payload.episodecount,
+startdate:payload.startdate,
+enddate:payload.enddate,
+Title:payload.Title,
+review_rating:payload.review_rating,
+tags:payload.tags,
+creators:payload.creators,
+recommendation:payload.recommendation,
+created_date:payload.created_date
+}]]]></db:input-parameters>
+					</db:insert>
+				</try>
+				<set-payload value='#[{"output":"The data are inserted successfully",&#10;	"customerID":vars.customer_Id&#10;}]' doc:name="Success Response" doc:id="51931b48-e022-4e00-b55f-e6570014ff35" />
+			</otherwise>
+		</choice>
+	</flow>
+</mule>
